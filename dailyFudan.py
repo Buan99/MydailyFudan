@@ -1,109 +1,125 @@
-#!/usr/bin/env python
-
-# -*- encoding: utf-8 -*-
-
-'''
-@Author  :   Fred Mei
-
-@License :   (C) Copyright 2013-2017, com.mhd
-
-@Contact :   {19210720004@fudan.edu.cn}
-
-@Software:   PyCharm
-
-@File    :   dailyFudan
-
-@Time    :   2021/5/30 10:27 下午
-
-@Desc    :实现平安复旦的自动化提交，每次提交的信息为上次的信息
-
-'''
 import os
-import requests
-from bs4 import BeautifulSoup
+import sys
 import json
 import time
+import hashlib
+import requests
+from bs4 import BeautifulSoup
 
-url_login = "https://uis.fudan.edu.cn/authserver/login"
-url_dailyFudan = "https://zlapp.fudan.edu.cn/site/ncov/fudanDaily"
-url_get_info= 'https://zlapp.fudan.edu.cn/ncov/wap/fudan/get-info'
-url_save= 'https://zlapp.fudan.edu.cn/ncov/wap/fudan/save'
-UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.212 Safari/537.36"
+USERNAME = os.getenv("USERNAME")
+PASSWORD = os.getenv("PASSWORD")
+PUSH_KEY = os.getenv("PUSH_KEY")
 
-class Login_Fudan:
+fudan_daily_url = "https://zlapp.fudan.edu.cn/site/ncov/fudanDaily"
+login_url = "https://uis.fudan.edu.cn/authserver/login?service=https%3A%2F%2Fzlapp.fudan.edu.cn%2Fa_fudanzlapp%2Fapi%2Fsso%2Findex%3Fredirect%3Dhttps%253A%252F%252Fzlapp.fudan.edu.cn%252Fsite%252Fncov%252FfudanDaily%26from%3Dwap"
+get_info_url = "https://zlapp.fudan.edu.cn/ncov/wap/fudan/get-info"
+save_log_url = "https://zlapp.fudan.edu.cn/wap/log/save-log"
+save_url = "https://zlapp.fudan.edu.cn/ncov/wap/fudan/save"
 
-    def __init__(self, username, pwd):
-        self.username = username
-        self.pwd = pwd
-        self.header = {'User-Agent':UA}
-        self.data = {'username':self.username,
-                     'password':self.pwd
-                     }
-        self.session=requests.session()
 
-    def logIn(self):
-        '''
-        登陆复旦uis系统
-        :return:
-        '''
-        response = self.session.get(url_login)
-        soup = BeautifulSoup(response.text,'lxml')
+def get_session(_login_info):
+    _session = requests.Session()
+    _session.headers["User-Agent"] = "Mozilla/5.0 (iPhone; CPU iPhone OS 14_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/7.0.18(0x17001229) NetType/WIFI Language/zh_CN miniProgram"
 
-        # 筛选出所有post请求体需要的参数（token）
-        def has_name_and_value(tag):
-            return tag.has_attr('name') and tag.has_attr('value') and 'username' not in tag['name'] and 'password' not \
-                   in tag['name']
+    _response = _session.get(login_url)
+    soup = BeautifulSoup(_response.text, "lxml")
+    inputs = soup.find_all("input")
+    for i in inputs:
+        if i.get("name") and i.get("name") not in ["username", "password", "captchaResponse"]:
+            _login_info[i.get("name")] = i.get("value")
+    _session.post(login_url, data=_login_info)
 
-        for item in soup.body.form.find_all(has_name_and_value):
-            self.data.update(zip([item['name']],[item['value']]))
-        #登陆账号
-        self.session.post(url_login,data=self.data)
+    _session.headers["Origin"] = "https://zlapp.fudan.edu.cn"
+    _session.headers["Referer"] = fudan_daily_url
+    return _session
 
-    def check(self):
-        '''
-        判断今日是否已经提交平安复旦
-        :return:
-        '''
-        # 获取上次提交的信息并用json接收，转为字典处理
-        self.last_info = json.loads(self.session.get(url_get_info).text)
-        self.cur_info = self.last_info['d']['info']
-        today = time.strftime('%Y%m%d')
-        if self.cur_info['date'] == today:
-            print("今日已提交")
-            return True
+
+def get_historical_info(_session):
+    response = session.get(get_info_url)
+    return json.loads(response.text)["d"]
+
+
+def save_log(_session):
+    _data = {
+        "appkey": "ncov",
+        "url": fudan_daily_url,
+        "timestamp": int(time.time())
+    }
+    _data["signature"] = hashlib.md5((_data["appkey"] + str(_data["timestamp"]) + _data["url"]).encode()).hexdigest()
+    _session.post(save_log_url, data=_data)
+
+
+def get_payload(_historical_info):
+    _payload = _historical_info["info"]
+    if "jrdqjcqk" in _payload:
+        _payload.pop("jrdqjcqk")
+    if "jrdqtlqk" in _payload:
+        _payload.pop("jrdqtlqk")
+
+    _payload.update({
+        "ismoved": 0,
+        "number": _historical_info["uinfo"]["role"]["number"],
+        "realname": _historical_info["uinfo"]["realname"],
+        "area": _historical_info["oldInfo"]["area"],
+        "city": _historical_info["oldInfo"]["city"],
+        "province": _historical_info["oldInfo"]["province"],
+        "sfhbtl": 0,
+        "sfjcgrq": 0
+    })
+    return _payload
+
+
+def get_payload_str(_payload):
+    _ = _payload.copy()
+    _["geo_api_info"] = json.loads(_["geo_api_info"])
+    return json.dumps(_, ensure_ascii=False)
+
+
+def save(_session, _payload):
+    return _session.post(save_url, data=_payload)
+
+
+def notify(_status, _message):
+    if not PUSH_KEY:
+        return
+
+    _d = {
+        "desp": _message
+    }
+    if _status:
+        _d["text"] = "打卡成功-GKJ"
+    else:
+        _d["text"] = "打卡失败，请手动打卡-GKJ"
+
+    requests.post(f"https://sc.ftqq.com/{PUSH_KEY}.send", data=_d)
+
+
+if __name__ == "__main__":
+    if not USERNAME or not PASSWORD:
+        notify(False, "GKJ-请正确配置用户名和密码！")
+        sys.exit()
+
+    login_info = {
+        "username": USERNAME,
+        "password": PASSWORD
+    }
+
+    try:
+        session = get_session(login_info)
+        historical_info = get_historical_info(session)
+        save_log(session)
+
+        payload = get_payload(historical_info)
+        payload_str = get_payload_str(payload)
+        # print(payload_str)
+
+        time.sleep(5)
+        response = save(session, payload)
+
+        if response.status_code == 200 and response.text == '{"e":0,"m":"GKJ-操作成功","d":{}}':
+            notify(True, payload_str)
         else:
-            print("今日未提交")
-            return False
+            notify(False, response.text)
 
-    def checkin(self):
-        '''
-        提交平安复旦
-        :return:
-        '''
-        old_info  = self.last_info['d']['oldInfo']
-        area = old_info['area']
-        province = old_info['province']
-        city = old_info['city']
-        self.cur_info.update(
-            {
-                'area': area,
-                'province':province,
-                'city':city,
-                'ismoved':'0'
-            }
-        )
-        self.session.post(url_save, data=self.cur_info)
-        print('正在提交平安复旦')
-
-
-
-
-
-if __name__ == '__main__':
-    username = os.getenv("USERNAME")
-    pwd = os.getenv("PASSWORD")
-    login=Login_Fudan(username,pwd)
-    login.logIn()
-    if not login.check():
-       login.checkin()
-       login.check()
+    except Exception as e:
+        notify(False, str(e))
