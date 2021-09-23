@@ -3,7 +3,7 @@ name: Fudan Daily
 
 on:
   schedule:
-    - cron: '00 10 * * *'
+    - cron: '00 00 * * *'
   workflow_dispatch:
 
 jobs:
@@ -24,3 +24,4 @@ jobs:
         env:
           USERNAME: ${{ secrets.USERNAME }}
           PASSWORD: ${{ secrets.PASSWORD }}
+          PUSH_KEY: ${{ secrets.PUSH_KEY }}
