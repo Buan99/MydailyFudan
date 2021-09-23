@@ -1,8 +1,10 @@
-name: Fudan Daily GKJ
+   
+name: Fudan Daily
 
 on:
   schedule:
-    - cron: '00 16 * * *'
+    - cron: '00 10 * * *'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -16,10 +18,9 @@ jobs:
         with:
           python-version: '3.8'
       - name: Prepare environment
-        run: pip install beautifulsoup4 lxml requests
+        run: pip install bs4 lxml requests
       - name: Run app
-        run: python fudanDaily-gkj.py
+        run: python dailyFudan.py
         env:
           USERNAME: ${{ secrets.USERNAME }}
           PASSWORD: ${{ secrets.PASSWORD }}
-          PUSH_KEY: ${{ secrets.PUSH_KEY }}
